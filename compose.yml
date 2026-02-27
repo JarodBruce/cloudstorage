@@ -109,6 +109,16 @@ services:
       - nextcloud-redis
       - minio-setup
 
+  collabora:
+    image: collabora/code:latest
+    environment:
+      - domain=${NC_DOMAIN_ESCAPED} # 例: nextcloud\\.example\\.com
+      - dictionaries=en_US,ja_JP
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=true
+    networks:
+      - public_net
+      - nextcloud_net
+
   # ==========================================
   # 4. Immich
   # ==========================================
