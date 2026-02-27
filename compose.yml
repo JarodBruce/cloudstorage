@@ -117,7 +117,7 @@ services:
       - extra_params=--o:ssl.enable=false --o:ssl.termination=true
     networks:
       - public_net
-      - nextcloud_net
+      - core_net
 
   # ==========================================
   # 4. Immich
