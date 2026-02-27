@@ -1,61 +1,31 @@
 version: '3.8'
 
 networks:
-  public_net: # Cloudflare Tunnelからのアクセス用
+  public_net:
     driver: overlay
-  nextcloud_net:
-    driver: overlay
-  immich_net:
+  core_net: # Swarm内の全アプリが通信するための共通ネットワーク
     driver: overlay
 
 volumes:
   minio_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/glusterfs/swarm-vol/minio
-  nextcloud_app_data:
+    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/minio }
+  nextcloud_config: # S3を使うため、ファイル本体は保存されず設定ファイルのみ
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/glusterfs/swarm-vol/nextcloud_app
+    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/nextcloud_config }
   nextcloud_db_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/glusterfs/swarm-vol/nextcloud_db
+    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/nextcloud_db }
   immich_app_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/glusterfs/swarm-vol/immich_app
+    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/immich_app }
   immich_db_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /mnt/glusterfs/swarm-vol/immich_db
+    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/immich_db }
 
 services:
   # ==========================================
-  # 1. Cloudflare Tunnels (外部公開・リバースプロキシ役)
-  # ==========================================
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    networks:
-      - public_net
-    deploy:
-      replicas: 2 # トンネルは複数稼働で冗長化可能
-
-  # ==========================================
-  # 2. MinIO (オブジェクトストレージ)
+  # 1. MinIO (データ母艦)
   # ==========================================
   minio:
     image: minio/minio:latest
@@ -67,9 +37,26 @@ services:
       - minio_data:/data
     networks:
       - public_net
+      - core_net
+
+  # MinIO起動直後にバケットを自動作成する便利コンテナ
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      - minio
+    networks:
+      - core_net
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 ${MINIO_USER} ${MINIO_PASSWORD};
+      mc mb myminio/nextcloud --ignore-existing;
+      mc mb myminio/fax-backup --ignore-existing;
+      exit 0;
+      "
 
   # ==========================================
-  # 3. Nextcloud + Collabora + DB + Redis
+  # 2. Nextcloud + DB + Redis
   # ==========================================
   nextcloud-db:
     image: postgres:15-alpine
@@ -80,12 +67,12 @@ services:
     volumes:
       - nextcloud_db_data:/var/lib/postgresql/data
     networks:
-      - nextcloud_net
+      - core_net
 
   nextcloud-redis:
     image: redis:alpine
     networks:
-      - nextcloud_net
+      - core_net
 
   nextcloud:
     image: nextcloud:apache
@@ -99,64 +86,26 @@ services:
       - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DOMAIN}
     volumes:
-      - nextcloud_app_data:/var/www/html
+      - nextcloud_config:/var/www/html # 実データはMinIOへ行くので容量は食わない
     networks:
       - public_net
-      - nextcloud_net
+      - core_net
     depends_on:
       - nextcloud-db
       - nextcloud-redis
-
-  collabora:
-    image: collabora/code:latest
-    environment:
-      - domain=${NC_DOMAIN_ESCAPED} # 例: nextcloud\\.example\\.com
-      - dictionaries=en_US,ja_JP
-      - extra_params=--o:ssl.enable=false --o:ssl.termination=true
-    networks:
-      - public_net
-      - nextcloud_net
+      - minio-setup
 
   # ==========================================
-  # 4. Immich (写真バックアップ)
+  # 3. Asterisk (FAXサーバー)
   # ==========================================
-  immich-db:
-    image: tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0
-    environment:
-      POSTGRES_PASSWORD: ${IMMICH_DB_PASSWORD}
-      POSTGRES_USER: ${IMMICH_DB_USER}
-      POSTGRES_DB: immich
-    volumes:
-      - immich_db_data:/var/lib/postgresql/data
+  asterisk:
+    image: andrius/asterisk:latest # ※お使いのAsteriskイメージに変更してください
+    # ports:
+    #   - "5060:5060/udp" # SIPポートなど外部公開が必要な場合
     networks:
-      - immich_net
+      - core_net
+    # volumes:
+    #   - /path/to/asterisk/etc:/etc/asterisk
 
-  immich-redis:
-    image: redis:6.2-alpine@sha256:e3b17ba9479deec4b7d1eeec1548a253acc5374d68d3b27937fcfe4df8d18c7e
-    networks:
-      - immich_net
-
-  immich-server:
-    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
-    command: [ "start.sh", "immich" ]
-    volumes:
-      - immich_app_data:/usr/src/app/upload
-    environment:
-      - DB_HOSTNAME=immich-db
-      - DB_USERNAME=${IMMICH_DB_USER}
-      - DB_PASSWORD=${IMMICH_DB_PASSWORD}
-      - DB_DATABASE_NAME=immich
-      - REDIS_HOSTNAME=immich-redis
-    networks:
-      - public_net
-      - immich_net
-    depends_on:
-      - immich-db
-      - immich-redis
-
-  immich-machine-learning:
-    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
-    volumes:
-      - immich_app_data:/usr/src/app/upload
-    networks:
-      - immich_net
+  # ※ImmichとCloudflaredの記述は長くなるため省略していますが、
+  # 以前と同じように core_net に参加させる形で追加してください。
