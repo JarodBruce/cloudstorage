@@ -100,6 +100,11 @@ services:
       - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
       - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DOMAIN}
+      # --- 追加分: Cloudflare Tunnel / リバースプロキシ設定 ---
+      - TRUSTED_PROXIES=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+      - OVERWRITEHOST=${NC_DOMAIN}
+      - OVERWRITEPROTOCOL=https
+      - OVERWRITEWEBROOT=/
       # --- MinIO(S3)をプライマリストレージにする自動設定 ---
       - OBJECTSTORE_S3_BUCKET=nextcloud
       - OBJECTSTORE_S3_KEY=${MINIO_USER}
