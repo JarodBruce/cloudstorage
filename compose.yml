@@ -10,10 +10,35 @@ networks:
 
 volumes:
   minio_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/glusterfs/swarm-vol/minio
   nextcloud_app_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/glusterfs/swarm-vol/nextcloud_app
   nextcloud_db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/glusterfs/swarm-vol/nextcloud_db
   immich_app_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/glusterfs/swarm-vol/immich_app
   immich_db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/glusterfs/swarm-vol/immich_db
 
 services:
   # ==========================================
@@ -42,10 +67,6 @@ services:
       - minio_data:/data
     networks:
       - public_net
-    deploy:
-      placement:
-        constraints:
-          - node.labels.storage == true # ストレージを持つノードに固定
 
   # ==========================================
   # 3. Nextcloud + Collabora + DB + Redis
@@ -60,9 +81,6 @@ services:
       - nextcloud_db_data:/var/lib/postgresql/data
     networks:
       - nextcloud_net
-    deploy:
-      placement:
-        constraints: [node.labels.storage == true]
 
   nextcloud-redis:
     image: redis:alpine
@@ -115,9 +133,6 @@ services:
       - immich_db_data:/var/lib/postgresql/data
     networks:
       - immich_net
-    deploy:
-      placement:
-        constraints: [node.labels.storage == true]
 
   immich-redis:
     image: redis:6.2-alpine@sha256:e3b17ba9479deec4b7d1eeec1548a253acc5374d68d3b27937fcfe4df8d18c7e
@@ -141,9 +156,6 @@ services:
     depends_on:
       - immich-db
       - immich-redis
-    deploy:
-      placement:
-        constraints: [node.labels.storage == true]
 
   immich-machine-learning:
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
