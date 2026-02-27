@@ -3,7 +3,7 @@ version: '3.8'
 networks:
   public_net: # Cloudflare Tunnel用
     driver: overlay
-  core_net:   # MinIO, Nextcloud, DB間の内部通信用
+  core_net:   # 内部通信用
     driver: overlay
 
 volumes:
@@ -38,7 +38,7 @@ services:
       replicas: 2
 
   # ==========================================
-  # 2. MinIO (データ母艦)
+  # 2. MinIO (データ母艦) + 自動バケット作成
   # ==========================================
   minio:
     image: minio/minio:latest
@@ -66,6 +66,9 @@ services:
       mc mb myminio/immich --ignore-existing;
       exit 0;
       "
+    deploy:
+      restart_policy:
+        condition: on-failure
 
   # ==========================================
   # 3. Nextcloud + DB + Redis
@@ -97,8 +100,16 @@ services:
       - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
       - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DOMAIN}
-      # プライマリストレージとしてMinIOを指定するための環境変数を追加可能ですが、
-      # 初回はconfig.phpを手動編集してS3連携させるのが確実です。
+      # --- MinIO(S3)をプライマリストレージにする自動設定 ---
+      - OBJECTSTORE_S3_BUCKET=nextcloud
+      - OBJECTSTORE_S3_KEY=${MINIO_USER}
+      - OBJECTSTORE_S3_SECRET=${MINIO_PASSWORD}
+      - OBJECTSTORE_S3_HOST=minio
+      - OBJECTSTORE_S3_PORT=9000
+      - OBJECTSTORE_S3_SSL=false
+      - OBJECTSTORE_S3_REGION=us-east-1
+      - OBJECTSTORE_S3_USEPATH_STYLE=true
+      - OBJECTSTORE_S3_AUTOCREATE=true
     volumes:
       - nextcloud_config:/var/www/html
     networks:
@@ -109,18 +120,47 @@ services:
       - nextcloud-redis
       - minio-setup
 
+  # ==========================================
+  # 4. Collabora + Nextcloud Office 自動セットアップ
+  # ==========================================
   collabora:
     image: collabora/code:latest
     environment:
-      - domain=${NC_DOMAIN_ESCAPED} # 例: nextcloud\\.example\\.com
+      - domain=${NC_DOMAIN_ESCAPED} # 例: nextcloud\\.yourdomain\\.com
       - dictionaries=en_US,ja_JP
       - extra_params=--o:ssl.enable=false --o:ssl.termination=true
     networks:
       - public_net
       - core_net
 
+  nextcloud-setup:
+    image: nextcloud:apache
+    volumes:
+      - nextcloud_config:/var/www/html
+    networks:
+      - core_net
+    depends_on:
+      - nextcloud
+      - collabora
+    entrypoint: /bin/bash
+    # Nextcloudが初期化されるのを待ってからCollaboraの設定を注入するスクリプト
+    command: >
+      -c "
+      echo 'Waiting for Nextcloud to finish installation...';
+      while ! su -s /bin/bash www-data -c 'php occ status' | grep -q 'installed: true'; do
+        sleep 10;
+      done;
+      echo 'Nextcloud is ready! Configuring Collabora Office...';
+      su -s /bin/bash www-data -c 'php occ app:install richdocuments';
+      su -s /bin/bash www-data -c 'php occ config:app:set richdocuments wopi_url --value=\"https://collabora.${NC_DOMAIN_BARE}\"';
+      echo 'Setup finished!';
+      "
+    deploy:
+      restart_policy:
+        condition: on-failure
+
   # ==========================================
-  # 4. Immich
+  # 5. Immich (以前のまま)
   # ==========================================
   immich-db:
     image: tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0
