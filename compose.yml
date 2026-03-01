@@ -207,3 +207,13 @@ services:
       - immich_app_data:/usr/src/app/upload
     networks:
       - core_net
+
+# ==========================================
+# 元の compose.yml の一番下の部分をこう書き換えます
+# ==========================================
+volumes:
+  minio_data:
+  nextcloud_config:
+  nextcloud_db_data:
+  immich_app_data:
+  immich_db_data:
